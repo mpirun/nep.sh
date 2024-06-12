@@ -1,0 +1,101 @@
+#!/bin/bash
+
+# 输入抽取数量的用户提示
+read -p "请输入等间距抽取构型的数量: " extract_count
+
+# 检查输入是否为整数
+if ! [[ "$extract_count" =~ ^[0-9]+$ ]]; then
+    echo "输入必须是整数。"
+    exit 1
+fi
+
+# 创建保存构型的文件夹
+mkdir -p POSCAR_XYZs
+
+# 获取原子数
+total_atoms=$(head -n 1 dump.xyz)
+let "header = total_atoms + 2"  # 加上标题行和评论行的总行数
+
+# 计算总构型数
+total_structures=$(grep -c "Lattice" dump.xyz)
+
+# 计算间隔
+let "interval = (total_structures + extract_count - 1) / extract_count"  # 计算间隔，向上取整
+
+# 初始化进度变量
+count=0
+max=$((total_structures / interval))
+
+# 抽取构型并替换第二行
+for (( i=1; i<=total_structures; i+=interval ))
+do
+    # 计算行号范围
+    let "start = (i - 1) * header + 1"
+    let "end = start + header - 1"
+    
+    # 读取和处理 Lattice 与 pbc 的值
+    lattice_line=$(awk "(NR==${start}+1)" dump.xyz)
+    lattice_value=$(echo $lattice_line | grep -oP 'Lattice="[^"]*"' | cut -d'"' -f2)
+    pbc_value=$(echo $lattice_line | grep -oP 'pbc="[^"]*"' | cut -d'"' -f2)
+
+    # 抽取指定行数范围内的构型到文件
+    awk -v start="$start" -v end="$end" 'NR>=start && NR<=end' dump.xyz > POSCAR_XYZs/POSCAR_temp_$i.xyz
+    
+    # 替换第二行
+    new_second_line="Lattice=\"$lattice_value\" Properties=species:S:1:pos:R:3 pbc=\"$pbc_value\""
+    sed -i "2s/.*/$new_second_line/" POSCAR_XYZs/POSCAR_temp_$i.xyz
+    
+    # 重命名文件
+    mv POSCAR_XYZs/POSCAR_temp_$i.xyz POSCAR_XYZs/POSCAR_$i.xyz
+
+    # 更新并打印进度条
+    let "count += 1"
+    let "progress = (count * 100 / max)"
+    printf "\rProgress: [%-50s] %d%%" $(printf '#%.0s' $(seq 1 $((progress / 2)))) $progress
+done
+
+
+echo -e "\n构型已被等间距抽取并放置于POSCAR_XYZs文件夹中。\n"
+
+echo -e "\n构型抽取完成，开始转换为POSCAR格式。"
+
+# 这里创建转换后的POSCAR文件存放的文件夹
+mkdir -p POSCARs
+
+# 获取文件总数，用于计算进度
+total_files=$(ls POSCAR_XYZs/*.xyz | wc -l)
+count=0
+
+echo -ne "转换进度 ["
+for filepath in POSCAR_XYZs/*.xyz; do
+    filename=$(basename -- "$filepath")
+    base="${filename%.*}"
+    
+    # 使用您提供的转换命令格式
+    ase convert -i extxyz -o vasp "$filepath" "POSCARs/S${base}.vasp" -f
+    
+    # 更新进度
+    let "count+=1"
+    percent=$(( 100 * count / total_files ))
+    bar=$(printf '#%.0s' $(seq 1 $(( count * 50 / total_files )) ))
+    printf '\r转换进度 [%-50s] %d%%' "$bar" "$percent"
+done
+echo -e "\n.xyz文件转换为POSCAR格式完成。\n"
+
+# 重命名POSCAR文件
+read -p "请输入开始重命名的序号： " start_index
+if ! [[ "$start_index" =~ ^[0-9]+$ ]]; then
+    echo "序号输入有误，请输入一个整数。"
+    exit 1
+fi
+
+count=0
+for filepath in POSCARs/S*.vasp; do
+    let "fileindex = start_index + count"
+    mv "$filepath" "POSCARs/SPOSCAR-${fileindex}"
+    let "count++"
+done
+
+echo -e "\nPOSCAR文件重命名完成。"
+
+
