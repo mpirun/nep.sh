@@ -1,0 +1,47 @@
+#!/bin/bash
+
+# 读取用户输入
+read -p "请输入第一次计算的温度: " start_temp
+read -p "请输入最后一次计算的温度: " end_temp
+read -p "请输入温度间隔: " temp_step
+
+# 验证用户输入是否为数字
+if ! [[ "$start_temp" =~ ^[0-9]+$ ]] || ! [[ "$end_temp" =~ ^[0-9]+$ ]] || ! [[ "$temp_step" =~ ^[0-9]+$ ]]; then
+    echo "输入的温度和间隔必须是整数。"
+    exit 1
+fi
+
+# 创建文件夹来保存日志和输入文件
+mkdir -p log
+mkdir -p run_files
+
+# Initialize progress bar
+echo "开始计算: "
+
+for ((temp=$start_temp; temp<=$end_temp; temp+=$temp_step))
+do
+    # 拷贝并修改 run.in 文件
+    cp -f run.in run_files/run_${temp}.in
+    sed -i "/velocity/s/300/$temp/" run_files/run_${temp}.in
+    sed -i "/ensemble/s/300/$temp/g" run_files/run_${temp}.in
+    
+    # 在后台启动 gpumd 并将日志输出到 log 文件夹
+    nohup gpumd < run_files/run_${temp}.in > log/log_${temp} 2>&1 &
+    
+    # 保存后台运行的进程 ID
+    pid=$!
+    
+    # Echo progress bar
+    echo -ne "温度 $temp: 运行中..."
+    
+    # 等待进程结束
+    while kill -0 "$pid" 2>/dev/null; do
+        echo -n "."
+        sleep 1
+    done
+    
+    echo " 完成."
+
+done
+
+echo "所有温度计算完成。"
